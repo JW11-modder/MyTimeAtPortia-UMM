@@ -1,2 +1,3 @@
 # MyTimeAtPortia-UMM
-UMM plugins for My Time at Portia
+
+UMM (https://github.com/newman55/unity-mod-manager) plugins for My Time at Portia
