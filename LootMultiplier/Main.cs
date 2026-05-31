@@ -7,6 +7,7 @@ using Pathea.ModuleNs;
 using Pathea.UISystemNs;
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
 using UnityEngine;
@@ -17,22 +18,22 @@ namespace LootMult
 {
     static class Main
     {
-
+        public static UnityModManager.ModEntry mod;
         // Send a response to the mod manager about the launch status, success or not.
         public static bool enabled;
         public static Settings settings { get; private set; }
 
         private static readonly bool isDebug = false;
 
-        public static void Dbgl(string str = "", bool pref = true)
+        public static void Log(string str = "", bool pref = true)
         {
-            if (isDebug)
-                Debug.Log((pref ? "LootMultiplier " : "") + str);
+                mod.Logger.Log((pref ? "LootMultiplier " : "") + str);
         }
 
         // Send a response to the mod manager about the launch status, success or not.
         private static bool Load(UnityModManager.ModEntry modEntry)
         {
+            mod = modEntry;
             settings = Settings.Load<Settings>(modEntry);
             modEntry.OnToggle = OnToggle;
             modEntry.OnGUI = OnGUI;
@@ -70,6 +71,15 @@ namespace LootMult
             GUILayout.Label(string.Format("Tech Loot Multiplier: <b>{0}x</b>", settings.TechMult), new GUILayoutOption[0]);
             settings.TechMult = (int)GUILayout.HorizontalSlider((float)Main.settings.TechMult, 1f, 100f, new GUILayoutOption[0]);
             settings.MultData[6] = settings.TechMult;
+            settings.InstantLoot = GUILayout.Toggle(settings.InstantLoot, "Enable instant autoloot", new GUILayoutOption[0]);
+            if (settings.InstantLoot)
+            {
+                GUILayout.Label(string.Format("Autoloot distance Multiplier: <b>{0}x</b>", settings.AutolootDistanceMult), new GUILayoutOption[0]);
+                settings.AutolootDistanceMult = (int)GUILayout.HorizontalSlider((float)Main.settings.AutolootDistanceMult, 1f, 100f, new GUILayoutOption[0]);
+            }
+            else
+                GUILayout.Label("", new GUILayoutOption[0]);
+
         }
 
         // Called when the mod is turned to on/off.
@@ -79,15 +89,45 @@ namespace LootMult
             return true; // Permit or not.
         }
 
+        // Pathea.ItemDropNs.ItemDrop
+        [HarmonyPatch(typeof(ItemDrop), nameof(ItemDrop.FetchItem))]
+        static class ItemDrop_CountGetter_Patch1
+        {
+            static void Postfix(ref ItemDrop __instance, ref ItemObject ___mItem)
+            {
+                if (!enabled)
+                {
+                    return;
+                }
+                if (Module<Player>.Self == null || Module<Player>.Self.actor == null)
+                {
+                    //Log("No actor!");
+                    return;
+                }
+                if (null != ___mItem)
+                {
+                    
+                    for (int i = 0; i < 7; i++)
+                    {
+                        if (LootIdData[i].Contains(___mItem.ItemBase.ID))
+                        {
+                            //Log("ItemId found: " + ___mItem.ItemBase.ID);
+                            ItemObject[] array = ItemObject.CreateItems(___mItem.ItemBase.ID, settings.MultData[i] - 1 );
+                            Module<Player>.Self.GainItems(0, array);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
         [HarmonyPatch(typeof(PlayerAutoPickTarget), "Start")]
         static class PlayerAutoPickTarget_Start_Patch
         {
             static bool Prefix(PlayerAutoPickTarget __instance)
             {
-                if (!enabled)
-                {
+                if (!enabled || !settings.InstantLoot)
                     return true;
-                }
 
                 if (Module<Player>.Self == null || Module<Player>.Self.actor == null)
                 {
@@ -96,30 +136,61 @@ namespace LootMult
 
                 ItemDrop component = __instance.GetComponent<ItemDrop>();
                 ItemPickFollow follow = __instance.GetComponent<ItemPickFollow>();
-
-                Dbgl("1");
+                if (Vector3.Distance(__instance.transform.position, Module<Player>.Self.GamePos + new Vector3(0f, Module<Player>.Self.actor.GetHeight() / 2f, 0f)) >= __instance.autoPickDistance * settings.AutolootDistanceMult)
+                {
+                    return true;
+                }
                 if (component != null && follow != null)
                 {
-                    Dbgl("2");
                     if (follow.CheckCanAddBag(component))
                     {
-                        Dbgl("3");
-                        for (int i = 0; i < 7; i++)
+                        component.FetchItem();
+                        if (Module<ItemDropManager>.Self != null)
                         {
-                            if (LootIdData[i].Contains(component.ItemID))
-                            {
-                                Module<Player>.Self.bag.AddItem(component.ItemID, settings.MultData[i] - 1, true, AddItemMode.ForceItemBar);
-                                break;
-                            }
+                            Module<ItemDropManager>.Self.DestroyDropItem(component);
                         }
+                        return false;
                     }
-
-
                 }
                 return true;
-
             }
         }
+
+        [HarmonyPatch(typeof(PlayerAutoPickTarget), "UpdatePickToTarget")]
+        static class PlayerAutoPickTarget_UpdatePickToTarget_Patch
+        {
+            static bool Prefix(PlayerAutoPickTarget __instance)
+            {
+                if (!enabled || !settings.InstantLoot)
+                    return true;
+
+                if (Module<Player>.Self == null || Module<Player>.Self.actor == null)
+                {
+                    return true;
+                }
+
+                ItemDrop component = __instance.GetComponent<ItemDrop>();
+                ItemPickFollow follow = __instance.GetComponent<ItemPickFollow>();
+                if (Vector3.Distance(__instance.transform.position, Module<Player>.Self.GamePos + new Vector3(0f, Module<Player>.Self.actor.GetHeight() / 2f, 0f)) >= __instance.autoPickDistance * settings.AutolootDistanceMult)
+                {
+                    return true;
+                }
+                if (component != null && follow != null)
+                {
+                    if (follow.CheckCanAddBag(component))
+                    {
+                        component.FetchItem();
+                        if (Module<ItemDropManager>.Self != null)
+                        {
+                            Module<ItemDropManager>.Self.DestroyDropItem(component);
+                        }
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+        
 
         static int[][] LootIdData = new int[7][]{ 
         //ore
